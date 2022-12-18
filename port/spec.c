@@ -1,38 +1,7 @@
 #include "bdd-for-c.h"
-
 #include <stdio.h>
 #include "prelude.c"
-
-/*
-typedef int64_t s64;
-typedef int32_t s32;
-typedef uint8_t u8;
-typedef uint64_t u64;
-typedef int8_t s8;
-typedef uint16_t u16;
-*/
-#define x64_ret 0xc3
-
-
-/*
-void buffer_append_u8(Buffer* buffer, u8 value)
-{
-        
-        assert(buffer->occupied + sizeof(value) <= buffer->capacity);
-        buffer->memory[buffer->occupied] = value;
-        buffer->occupied  += sizeof(value);
-};
-
-void buffer_append_s32(Buffer* buffer, s32 value)
-{
-        
-        assert(buffer->occupied + sizeof(value) <= buffer->capacity);
-        u8* first_non_occupied_address = buffer->memory + buffer->occupied;
-        s32* target = (s32*)first_non_occupied_address;
-        *target = value;
-        buffer->occupied  += sizeof(value);
-};
-*/
+#include "encoding.c"
 
 typedef s32 (*constant_s32)();
 
@@ -57,7 +26,10 @@ typedef enum
 
 typedef enum
 {
-        Operand_Type_Register = 1,
+        Operand_Type_None,
+        Operand_Type_Register,
+        Operand_Type_Immediate_8,
+        Operand_Type_Immediate_32,
 }Operand_Type;
 
 typedef struct
@@ -68,11 +40,13 @@ typedef struct
 
 typedef struct
 {
+        
         Operand_Type type;
         union
         {
                 Register reg;
                 s8 imm8;
+                s32 imm32;
         };
         
 }Operand;
@@ -99,111 +73,153 @@ define_register(r14, 14);
 define_register(r15, 15);
 #undef define_register
 
-/*
-const Operand rax = {
-        .type = Operand_Type_Register,
-        .reg =  {.index = 0b0000},
-};
-*/
-
-
 const Operand eax = {
         .type = Operand_Type_Register,
         .reg =  {.index = 0b000},
 };
-
-/*
-const Operand rdi = {
-        .type = Operand_Type_Register,
-        .reg =  {.index = 0b0100},
-};
-*/
-
 
 const Operand edi = {
         .type = Operand_Type_Register,
         .reg =  {.index = 0b111},
 };
 
-
-typedef enum
-{
-        mov = 1,
-        
-}X64_Mnemonic;
-
 typedef struct
 {
-        X64_Mnemonic mnemonic;
+        const X64_Mnemonic mnemonic;
         Operand operands[2];
         
 }Instruction;
 
-typedef enum
+Operand imm8(s8 value)
 {
-        Instruction_Extension_Type_Register = 1,
-        Instruction_Extension_Type_Op_Code,
-        Instruction_Extension_Type_Plus_Register,
-}Instruction_Extension_Type;
+        return (const Operand) {.type = Operand_Type_Immediate_8, .imm8 = value};
+}
 
-typedef enum
+Operand imm32(s32 value)
 {
-        Operand_Encoding_Type_Register = 1,
-        Operand_Encoding_Type_Register_Memory,
-}Operand_Encoding_Type;
+        return (const Operand) {.type = Operand_Type_Immediate_8, .imm32 = value};
+}
 
-typedef struct
-{
-        u16 op_code;
-        Instruction_Extension_Type extension_type;
-        Operand_Encoding_Type operand_encoding_types[2];
-        
-}Instruction_Encoding;
 
 void encode(Buffer* buffer, Instruction instruction)
-{
-        Instruction_Encoding encoding  = {
-                .op_code = 0x89,
-                .extension_type = Instruction_Extension_Type_Register,
-                .operand_encoding_types = {
-                        Operand_Encoding_Type_Register_Memory,
-                        Operand_Encoding_Type_Register,
-                },
-        };
-        buffer_append_u8(buffer, REX_W);
-        buffer_append_u8(buffer, (u8)encoding.op_code);
-        u8 mod_r_m = {
-                (MOD_Register << 6) |
-                (instruction.operands[0].reg.index << 3) |
-                (instruction.operands[1].reg.index)  
-        };
-        
-        buffer_append_u8(buffer, mod_r_m);
-        
-}
-
-void
-buffer_append_sub_rsp_imm_8(
-                            Buffer *buffer,
-                            s8 value
-                            ) {
-        
-        buffer_append_u8(buffer, 0x48);
-        buffer_append_u8(buffer, 0x83);
-        buffer_append_u8(buffer, 0xEC);
-        buffer_append_u8(buffer, value);
-}
-
-void
-buffer_append_add_rsp_imm_8(
-                            Buffer *buffer,
-                            s8 value
-                            ) {
-        
-        buffer_append_u8(buffer, 0x48);
-        buffer_append_u8(buffer, 0x83);
-        buffer_append_u8(buffer, 0xc4);
-        buffer_append_u8(buffer, value);
+{   for (u32 index = 0; index < instruction.mnemonic.encoding_count; ++index) {
+                const Instruction_Encoding *encoding = &instruction.mnemonic.encoding_list[index];
+                bool match = true;
+                // FIXME remove hardcoded 2 for operand count
+                for (u32 operand_index = 0; operand_index < 2; ++operand_index) {
+                        Operand_Encoding_Type encoding_type = encoding->operand_encoding_types[operand_index];
+                        Operand_Type operand_type = instruction.operands[operand_index].type;
+                        if (operand_type == Operand_Type_None && encoding_type == Operand_Encoding_Type_None) {
+                                continue;
+                        }
+                        if (operand_type == Operand_Type_Register && encoding_type == Operand_Encoding_Type_Register) {
+                                continue;
+                        }
+                        if (operand_type == Operand_Type_Register && encoding_type == Operand_Encoding_Type_Register_Memory) {
+                                continue;
+                        }
+                        if (operand_type == Operand_Type_Memory_Indirect && encoding_type == Operand_Encoding_Type_Register_Memory) {
+                                continue;
+                        }
+                        if (operand_type == Operand_Type_Immediate_8 && encoding_type == Operand_Encoding_Type_Immediate_8) {
+                                continue;
+                        }
+                        if (operand_type == Operand_Type_Immediate_32 && encoding_type == Operand_Encoding_Type_Immediate_32) {
+                                continue;
+                        }
+                        match = false;
+                }
+                
+                if (!match) continue;
+                
+                bool needs_mod_r_m = false;
+                u8 reg_or_op_code = 0;
+                u8 rex_byte = 0;
+                u8 r_m = 0;
+                u8 mod = MOD_Register;
+                bool needs_sib = false;
+                u8 sib_byte = 0;
+                for (u32 operand_index = 0; operand_index < 2; ++operand_index) {
+                        Operand *operand = &instruction.operands[operand_index];
+                        Operand_Encoding_Type encoding_type = encoding->operand_encoding_types[operand_index];
+                        
+                        if (operand->type == Operand_Type_Register) {
+                                // FIXME add REX.W prefix only if 64 bit
+                                rex_byte |= REX_W;
+                                if (encoding_type == Operand_Encoding_Type_Register) {
+                                        assert(encoding->extension_type != Instruction_Extension_Type_Op_Code);
+                                        reg_or_op_code = operand->reg.index;
+                                }
+                        }
+                        if(encoding_type == Operand_Encoding_Type_Register_Memory) {
+                                needs_mod_r_m = true;
+                                if (operand->type == Operand_Type_Register) {
+                                        r_m = operand->reg.index;
+                                        mod = MOD_Register;
+                                } else {
+                                        mod = MOD_Displacement_s32;
+                                        assert(operand->type == Operand_Type_Memory_Indirect);
+                                        r_m = operand->indirect.reg.index;
+                                        if (r_m == rsp.reg.index) {
+                                                needs_sib = true;
+                                                // FIXME support proper SIB for non-rsp registers
+                                                sib_byte = (
+                                                            (SIB_Scale_1 << 6) |
+                                                            (r_m << 3) |
+                                                            (r_m)
+                                                            );
+                                        }
+                                }
+                        }
+                }
+                
+                if (encoding->extension_type == Instruction_Extension_Type_Op_Code) {
+                        reg_or_op_code = encoding->op_code_extension;
+                }
+                
+                if (rex_byte) {
+                        buffer_append_u8(buffer, REX_W);
+                }
+                
+                // FIXME if op code is 2 bytes need different append
+                buffer_append_u8(buffer, (u8) encoding->op_code);
+                
+                // FIXME Implement proper mod support
+                // FIXME mask register index
+                if (needs_mod_r_m) {
+                        u8 mod_r_m = (
+                                      (mod << 6) |
+                                      (reg_or_op_code << 3) |
+                                      (r_m)
+                                      );
+                        buffer_append_u8(buffer, mod_r_m);
+                }
+                
+                if (needs_sib) {
+                        buffer_append_u8(buffer, sib_byte);
+                }
+                
+                // Write out displacement
+                for (u32 operand_index = 0; operand_index < 2; ++operand_index) {
+                        Operand *operand = &instruction.operands[operand_index];
+                        if (operand->type == Operand_Type_Memory_Indirect) {
+                                buffer_append_s32(buffer, operand->indirect.displacement);
+                        }
+                }
+                // Write out immediate operand(s?)
+                for (u32 operand_index = 0; operand_index < 2; ++operand_index) {
+                        Operand *operand = &instruction.operands[operand_index];
+                        if (operand->type == Operand_Type_Immediate_8) {
+                                buffer_append_s8(buffer, operand->imm8);
+                        }
+                        if (operand->type == Operand_Type_Immediate_32) {
+                                buffer_append_s32(buffer, operand->imm32);
+                        }
+                }
+                return;
+        }
+        // Didn't find any encoding
+        assert(!"Did not find acceptable encoding");
 }
 
 void
@@ -236,7 +252,6 @@ buffer_append_add_to_edi_value_at_stack_offset(
                                                Buffer *buffer,
                                                s8 value
                                                ) {
-        //buffer_append_u8(buffer, 0x48);
         buffer_append_u8(buffer, 0x03);
         buffer_append_u8(buffer, 0x7C);
         buffer_append_u8(buffer, 0x24);
@@ -253,29 +268,20 @@ buffer_append_mov_to_rcx_from_rax(
         buffer_append_u8(buffer, 0xc8);
 }
 
-void
-buffer_append_mov_to_rax_from_edi(
-                                  Buffer *buffer
-                                  ) {
-        
-        encode(buffer, (Instruction)  {mov, {edi, rax}});
-        //buffer_append_u8(buffer, 0x89);
-        //buffer_append_u8(buffer, 0xF8);
-}
-
 constant_s32
 make_constant_s32(
                   s32 value
                   ) {
         
+        
         Buffer buffer = make_buffer(1024, MAP_PRIVATE | MAP_ANONYMOUS );
         
-        buffer_append_u8(&buffer, 0x48);
+        /*buffer_append_u8(&buffer, 0x48);
         buffer_append_u8(&buffer, 0xc7);
         buffer_append_u8(&buffer, 0xc0);
-        buffer_append_s32(&buffer, value);
-        buffer_append_u8(&buffer, x64_ret);
-        
+        buffer_append_s32(&buffer, value);*/
+        encode(&buffer, (Instruction) {mov, {rax, imm32(value)}});
+        encode(&buffer, (Instruction) {ret, { 0}});
         return (constant_s32)buffer.memory;
 }
 
@@ -286,11 +292,8 @@ make_identity_s64() {
         
         Buffer buffer = make_buffer(1024, MAP_PRIVATE | MAP_ANONYMOUS );
         
-        encode(&buffer, (Instruction) {mov, {edi, eax}});
-        //buffer_append_u8(&buffer, 0x48);
-        //buffer_append_u8(&buffer, 0x89);
-        //buffer_append_u8(&buffer, 0xF8);
-        buffer_append_u8(&buffer, x64_ret);
+        encode(&buffer, (Instruction) {mov, {rax, edi}});
+        encode(&buffer, (Instruction) {ret, { 0}});
         
         return (identity_s64)buffer.memory;
 }
@@ -301,14 +304,12 @@ increment_s64
 make_increment_s64() {
         
         Buffer buffer = make_buffer(1024, MAP_PRIVATE | MAP_ANONYMOUS );
-        buffer_append_sub_rsp_imm_8(&buffer, 24);
+        encode(&buffer, (Instruction){sub, {rsp, imm8(24)}});
         buffer_append_mov_to_stack_offset_imm_32(&buffer, 20, 1);
         buffer_append_add_to_edi_value_at_stack_offset(&buffer, 20);
-        
-        //buffer_append_mov_to_rax_from_edi(&buffer);
-        encode(&buffer, (Instruction) {mov, { edi, eax}});
-        buffer_append_add_rsp_imm_8(&buffer, 24);
-        buffer_append_u8(&buffer, x64_ret);
+        encode(&buffer, (Instruction) {mov, { rax, edi}});
+        encode(&buffer, (Instruction){add, {rsp, imm8(24)}});
+        encode(&buffer, (Instruction) {ret, { 0}});
         return (increment_s64)buffer.memory;
 }
 

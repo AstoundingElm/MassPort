@@ -34,6 +34,8 @@ Buffer make_buffer(u64 capacity, s32 permission_flags)
         
 }
 
+#define static_array_size(Array) (sizeof(Array) / sizeof(Array[0]))
+
 #define define_buffer_append(Type) \
 void \
 buffer_append_##Type( \
