@@ -1,17 +1,5 @@
-#include <stdint.h>
-#include <stdbool.h>
-#include <assert.h>
+#include "types.h"
 #include <sys/mman.h>
-#include <stdlib.h>
-typedef int8_t  s8;
-typedef int16_t s16;
-typedef int32_t s32;
-typedef int64_t s64;
-
-typedef uint8_t  u8;
-typedef uint16_t u16;
-typedef uint32_t u32;
-typedef uint64_t u64;
 
 typedef struct {
         u8 *memory;
@@ -19,20 +7,20 @@ typedef struct {
         u64 capacity;
 } Buffer;
 
-
-Buffer make_buffer(u64 capacity, s32 permission_flags)
-{
-        
+Buffer
+make_buffer(
+            u64 capacity,
+            s32 permission_flags
+            ) {
         u8* memory = mmap(0, capacity, PROT_READ | PROT_WRITE | PROT_EXEC,  permission_flags, 0,0);
-        return (const Buffer)
-        {
+        return (const Buffer) {
                 .memory = memory,
-                
                 .capacity = capacity,
                 .occupied = 0,
         };
-        
 }
+
+#define static_array_size(Array) (sizeof(Array) / sizeof(Array[0]))
 
 #define define_buffer_append(Type) \
 void \

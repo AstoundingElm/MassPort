@@ -6,5 +6,5 @@
 #ld exit.o -o test
 #gcc exit.o -o test
 #./test
-gcc  spec.c
+clang -std=gnu18 -O1  spec.c -lm
 ./a.out
